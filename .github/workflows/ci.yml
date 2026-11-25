@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    env:
+      KUBECONFORM_VERSION: "0.6.7"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+
+      - name: yamllint
+        run: yamllint --strict .
+
+      - name: Template structure tests
+        run: pytest -q
+
+      - name: Example app unit tests
+        working-directory: example
+        run: python -m unittest discover -v
+
+      - name: Install kubeconform (checksum-verified)
+        run: |
+          base="https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}"
+          curl -fsSLO "${base}/kubeconform-linux-amd64.tar.gz"
+          curl -fsSL "${base}/CHECKSUMS" | grep " kubeconform-linux-amd64.tar.gz\$" | sha256sum -c -
+          tar -xzf kubeconform-linux-amd64.tar.gz kubeconform
+
+      - name: Validate Kubernetes manifests
+        run: ./kubeconform -strict -summary -kubernetes-version 1.31.0 example/k8s/

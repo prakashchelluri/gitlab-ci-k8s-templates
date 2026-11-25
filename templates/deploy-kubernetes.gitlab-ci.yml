@@ -1,0 +1,132 @@
+# Deploy to Kubernetes with a rollout gate and automatic rollback.
+#
+#   deploy-staging      kubectl apply, then `kubectl rollout status --timeout` is the gate
+#   rollback-staging    runs only if deploy-staging failed: `kubectl rollout undo` if our image went out
+#   deploy-production   manual promotion of the same image to the protected `production` environment
+#   rollback-production same rollback logic for production
+#
+# Cluster access: either connect the GitLab agent for Kubernetes and set *_KUBE_CONTEXT
+# (e.g. "group/agent-project:agent-name"), or store a kubeconfig as a File-type CI/CD variable
+# named KUBECONFIG, scoped to the matching environment. Nothing secret lives in this file.
+
+variables:
+  KUBE_CLI: "kubectl"
+  KUBE_CLI_IMAGE: "alpine/k8s:1.31.2"
+  K8S_MANIFESTS: "k8s"                            # *.yaml manifests; __IMAGE__ becomes the built image
+  K8S_DEPLOYMENT: "$CI_PROJECT_NAME"              # Deployment to gate on and roll back
+  K8S_CONTAINER: "app"                            # container in that Deployment that runs the built image
+  ROLLOUT_TIMEOUT: "180s"
+  STAGING_NAMESPACE: "$CI_PROJECT_NAME-staging"
+  STAGING_KUBE_CONTEXT: ""
+  PRODUCTION_NAMESPACE: "$CI_PROJECT_NAME"
+  PRODUCTION_KUBE_CONTEXT: ""
+
+.kube-auth:
+  before_script:
+    - if [ -n "$KUBE_CONTEXT" ]; then $KUBE_CLI config use-context "$KUBE_CONTEXT"; fi
+
+.k8s-deploy:
+  extends: .kube-auth
+  image:
+    name: $KUBE_CLI_IMAGE
+    entrypoint: [""]
+  script:
+    - |
+      set -eu
+      image="$IMAGE_NAME:$IMAGE_TAG"
+      mkdir -p rendered
+      for f in "$K8S_MANIFESTS"/*.yaml; do
+        sed "s|__IMAGE__|$image|g" "$f" > "rendered/$(basename "$f")"
+      done
+      echo "Deploying $image to namespace $KUBE_NAMESPACE"
+      $KUBE_CLI apply -n "$KUBE_NAMESPACE" -f rendered/
+      $KUBE_CLI rollout status "deployment/$K8S_DEPLOYMENT" -n "$KUBE_NAMESPACE" --timeout="$ROLLOUT_TIMEOUT"
+  artifacts:
+    when: always
+    paths: [rendered/]
+    expire_in: 30 days
+
+.k8s-rollback:
+  extends: .kube-auth
+  image:
+    name: $KUBE_CLI_IMAGE
+    entrypoint: [""]
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - |
+      set -eu
+      image="$IMAGE_NAME:$IMAGE_TAG"
+      jsonpath="{.spec.template.spec.containers[?(@.name==\"$K8S_CONTAINER\")].image}"
+      if ! current="$($KUBE_CLI get "deployment/$K8S_DEPLOYMENT" -n "$KUBE_NAMESPACE" -o jsonpath="$jsonpath")"; then
+        echo "deployment/$K8S_DEPLOYMENT not found in $KUBE_NAMESPACE: nothing to roll back."
+        exit 0
+      fi
+      # Only undo a rollout this pipeline started. If apply failed before the Deployment changed,
+      # `rollout undo` would wrongly step back to the revision *before* the healthy one.
+      if [ "$current" != "$image" ]; then
+        echo "deployment/$K8S_DEPLOYMENT runs $current, not $image: it was never changed, nothing to roll back."
+        exit 0
+      fi
+      echo "Rollout of $image failed; rolling back deployment/$K8S_DEPLOYMENT"
+      $KUBE_CLI rollout undo "deployment/$K8S_DEPLOYMENT" -n "$KUBE_NAMESPACE"
+      $KUBE_CLI rollout status "deployment/$K8S_DEPLOYMENT" -n "$KUBE_NAMESPACE" --timeout="$ROLLOUT_TIMEOUT"
+      $KUBE_CLI rollout history "deployment/$K8S_DEPLOYMENT" -n "$KUBE_NAMESPACE"
+
+deploy-staging:
+  extends: .k8s-deploy
+  stage: staging
+  needs: [build-image, image-scan]
+  variables:
+    KUBE_NAMESPACE: $STAGING_NAMESPACE
+    KUBE_CONTEXT: $STAGING_KUBE_CONTEXT
+  environment:
+    name: staging
+  resource_group: staging                         # one deploy per environment at a time
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+rollback-staging:
+  extends: .k8s-rollback
+  stage: staging
+  needs: [deploy-staging]
+  variables:
+    KUBE_NAMESPACE: $STAGING_NAMESPACE
+    KUBE_CONTEXT: $STAGING_KUBE_CONTEXT
+  environment:
+    name: staging
+    action: access                                # does not count as a new deployment
+  resource_group: staging
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_failure
+
+deploy-production:
+  extends: .k8s-deploy
+  stage: production
+  needs: [deploy-staging]
+  variables:
+    KUBE_NAMESPACE: $PRODUCTION_NAMESPACE
+    KUBE_CONTEXT: $PRODUCTION_KUBE_CONTEXT
+  environment:
+    name: production                              # mark as protected in Settings > CI/CD > Protected environments
+  resource_group: production
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+  allow_failure: false                            # pipeline shows as blocked until someone promotes
+
+rollback-production:
+  extends: .k8s-rollback
+  stage: production
+  needs: [deploy-production]
+  variables:
+    KUBE_NAMESPACE: $PRODUCTION_NAMESPACE
+    KUBE_CONTEXT: $PRODUCTION_KUBE_CONTEXT
+  environment:
+    name: production
+    action: access
+  resource_group: production
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_failure

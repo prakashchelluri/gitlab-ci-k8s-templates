@@ -1,0 +1,31 @@
+# Build and push a container image with Kaniko: no Docker daemon or privileged runner needed.
+# Pushes to the project's GitLab container registry by default, tagged with the commit SHA.
+
+variables:
+  KANIKO_IMAGE: "gcr.io/kaniko-project/executor:v1.24.0-debug"   # -debug tag ships the busybox shell CI needs
+  BUILD_CONTEXT: "."                              # relative to the repository root
+  DOCKERFILE_PATH: "Dockerfile"                   # relative to the repository root
+  IMAGE_NAME: "$CI_REGISTRY_IMAGE"
+  IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
+  KANIKO_CACHE: "true"                            # layer cache stored at $IMAGE_NAME/cache
+  KANIKO_EXTRA_ARGS: ""                           # e.g. "--build-arg VERSION=1.2.3"
+
+build-image:
+  stage: build
+  image:
+    name: $KANIKO_IMAGE
+    entrypoint: [""]
+  script:
+    # Registry credentials come from GitLab's predefined job variables, never from files in the repo.
+    - mkdir -p /kaniko/.docker
+    - AUTH="$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')"
+    - printf '{"auths":{"%s":{"auth":"%s"}}}' "$CI_REGISTRY" "$AUTH" > /kaniko/.docker/config.json
+    - >-
+      /kaniko/executor
+      --context "$CI_PROJECT_DIR/$BUILD_CONTEXT"
+      --dockerfile "$CI_PROJECT_DIR/$DOCKERFILE_PATH"
+      --destination "$IMAGE_NAME:$IMAGE_TAG"
+      --cache="$KANIKO_CACHE"
+      --label "org.opencontainers.image.revision=$CI_COMMIT_SHA"
+      --label "org.opencontainers.image.source=$CI_PROJECT_URL"
+      $KANIKO_EXTRA_ARGS

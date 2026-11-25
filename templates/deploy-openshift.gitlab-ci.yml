@@ -1,0 +1,16 @@
+# OpenShift variant. Include it AFTER deploy-kubernetes.gitlab-ci.yml: it swaps kubectl for `oc`
+# and logs in with a token instead of a kube context. Every job and rollback rule is reused as is.
+#
+# Required CI/CD variables (masked, scoped per environment): OPENSHIFT_SERVER, OPENSHIFT_TOKEN
+# (e.g. a service-account token with edit rights on the target project).
+
+variables:
+  KUBE_CLI: "oc"
+  KUBE_CLI_IMAGE: "quay.io/openshift/origin-cli:4.16"
+  OPENSHIFT_INSECURE_SKIP_TLS_VERIFY: "false"
+
+.kube-auth:
+  before_script:
+    - >-
+      oc login --server="$OPENSHIFT_SERVER" --token="$OPENSHIFT_TOKEN"
+      --insecure-skip-tls-verify="$OPENSHIFT_INSECURE_SKIP_TLS_VERIFY"

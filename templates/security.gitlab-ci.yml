@@ -1,0 +1,47 @@
+# Secret scanning (gitleaks) and image vulnerability scanning (Trivy).
+
+variables:
+  GITLEAKS_IMAGE: "zricethezav/gitleaks:v8.21.2"
+  GITLEAKS_ARGS: ""                               # e.g. "--config .gitleaks.toml"
+  TRIVY_IMAGE: "aquasec/trivy:0.57.1"
+  TRIVY_SEVERITY: "CRITICAL"                      # comma list, e.g. "HIGH,CRITICAL"
+  TRIVY_IGNORE_UNFIXED: "false"                   # "true" skips CVEs with no fixed version yet
+  TRIVY_EXIT_CODE: "1"                            # "0" reports findings without failing the pipeline
+
+secret-scan:
+  stage: lint
+  image:
+    name: $GITLEAKS_IMAGE
+    entrypoint: [""]
+  variables:
+    GIT_DEPTH: "0"                                # scan the whole history, not just the last commit
+  script:
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - gitleaks git --redact --verbose --report-format json --report-path gitleaks-report.json $GITLEAKS_ARGS .
+  artifacts:
+    when: on_failure
+    paths: [gitleaks-report.json]
+    expire_in: 7 days
+
+image-scan:
+  stage: scan
+  image:
+    name: $TRIVY_IMAGE
+    entrypoint: [""]
+  needs: [build-image]
+  variables:
+    GIT_STRATEGY: none                            # scans the pushed image, needs no source
+    TRIVY_USERNAME: "$CI_REGISTRY_USER"
+    TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
+    TRIVY_CACHE_DIR: ".trivycache/"
+    TRIVY_NO_PROGRESS: "true"
+  script:
+    - >-
+      trivy image
+      --severity "$TRIVY_SEVERITY"
+      --exit-code "$TRIVY_EXIT_CODE"
+      --ignore-unfixed="$TRIVY_IGNORE_UNFIXED"
+      "$IMAGE_NAME:$IMAGE_TAG"
+  cache:
+    key: trivy-db
+    paths: [.trivycache/]

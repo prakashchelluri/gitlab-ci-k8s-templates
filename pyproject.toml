@@ -1,0 +1,21 @@
+# Not a library: this only pins the tools used to check the templates.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gitlab-ci-k8s-templates"
+version = "1.0.0"
+description = "Reusable GitLab CI templates for shipping a containerised app to Kubernetes/OpenShift"
+license = "MIT"
+authors = [{ name = "Satya Prakash Chelluri" }]
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "PyYAML>=6.0", "yamllint>=1.35"]
+
+[tool.setuptools]
+packages = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

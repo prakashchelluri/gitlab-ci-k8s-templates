@@ -1,0 +1,23 @@
+# Lint and unit-test jobs. Language-agnostic: pick the image and commands with variables.
+# Defaults suit a Python project; override LINT_IMAGE / LINT_COMMAND / TEST_* for anything else.
+
+variables:
+  APP_DIR: "."                                    # directory the commands run in
+  LINT_IMAGE: "python:3.12.7-slim"
+  LINT_COMMAND: "pip install --quiet ruff==0.7.4 && ruff check ."
+  TEST_IMAGE: "python:3.12.7-slim"
+  TEST_COMMAND: "python -m unittest discover -v"
+
+lint:
+  stage: lint
+  image: $LINT_IMAGE
+  script:
+    - cd "$APP_DIR"
+    - sh -c "$LINT_COMMAND"
+
+unit-test:
+  stage: test
+  image: $TEST_IMAGE
+  script:
+    - cd "$APP_DIR"
+    - sh -c "$TEST_COMMAND"

@@ -1,0 +1,31 @@
+# Example pipeline for an app repository that uses the templates.
+# This folder stands in for the root of that app repository.
+
+include:
+  - project: "platform/gitlab-ci-k8s-templates"   # wherever you host this repository
+    ref: "v1.0.0"                                 # pin a tag so template changes are opt-in
+    file:
+      - templates/lint-test.gitlab-ci.yml
+      - templates/build-kaniko.gitlab-ci.yml
+      - templates/security.gitlab-ci.yml
+      - templates/deploy-kubernetes.gitlab-ci.yml
+      # - templates/deploy-openshift.gitlab-ci.yml  # OpenShift: add after deploy-kubernetes
+
+stages: [lint, test, build, scan, staging, production]
+
+workflow:
+  rules:                                          # one pipeline per MR or branch push, not both
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+
+variables:
+  K8S_DEPLOYMENT: "hello-app"
+  K8S_CONTAINER: "app"
+  ROLLOUT_TIMEOUT: "120s"
+  TRIVY_SEVERITY: "HIGH,CRITICAL"                 # stricter than the template default
+  KANIKO_EXTRA_ARGS: "--build-arg APP_VERSION=$CI_COMMIT_SHORT_SHA"
+  # GitLab agent for Kubernetes contexts ("<agent config project>:<agent name>").
+  STAGING_KUBE_CONTEXT: "platform/k8s-agents:staging"
+  PRODUCTION_KUBE_CONTEXT: "platform/k8s-agents:production"
